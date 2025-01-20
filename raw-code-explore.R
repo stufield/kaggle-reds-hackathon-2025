@@ -34,23 +34,27 @@ codebook <- readRDS("data/codebook.rds")
 people <- read.csv("data/lahman_people.csv", header = TRUE) |>
   tibble::as_tibble()
 savant_data <- readRDS("data/savant_data_2021_2023.rds")
+ids <- read.csv("data/sample_submission.csv")$PLAYER_ID
 
-
-
-playtime_by_batter <- function(data, ...) {
+playtime_by_player <- function(data, ...) {
+  pos <- substitute(...)
   dplyr::group_by(data, ...) |>
     dplyr::summarise() |>
     dplyr::ungroup() |>
-    dplyr::group_by(batter, game_year) |>
+    dplyr::group_by(!!pos, game_year) |>
     dplyr::summarise(playing_time = dplyr::n()) |>
     dplyr::ungroup() |>
-    dplyr::group_by(batter) |>
+    dplyr::group_by(!!pos) |>
     dplyr::summarise(playing_time = round(mean(playing_time)))
 }
 
-init <- playtime_by_batter(savant_data, batter, game_year,
-                           game_pk, at_bat_number)
+init_batter <- playtime_by_player(savant_data, batter, game_year,
+                                  game_pk, at_bat_number) |>
+  dplyr::filter(batter %in% ids)
 
+init_pitcher <- playtime_by_player(savant_data, pitcher, game_year,
+                                   game_pk, at_bat_number) |>
+  dplyr::filter(pitcher %in% ids)
 
 feat_by_batter <- function(x) {
   var <- rlang::sym(x)
@@ -59,76 +63,110 @@ feat_by_batter <- function(x) {
     dplyr::summarise(!!var := mean(!!var))
 }
 
-ft_data <- lapply(feats, feat_by_batter)
-ids <- read.csv("data/sample_submission.csv")$PLAYER_ID
-playtime_data <- be_hard(dplyr::left_join, by = "batter") |>
-  Reduce(ft_data, init) |>
+feat_by_pitcher <- function(x) {
+  var <- rlang::sym(x)
+  dplyr::group_by(savant_data, pitcher) |>
+    tidyr::drop_na(!!var) |>
+    dplyr::summarise(!!var := mean(!!var))
+}
+
+# vars from the people data set
+people_vars <- c("birthCountry", "bats", "throws",
+                 "debut", "birthDate")
+
+types <- tibble::enframe(sapply(savant_data, class),
+                         name = "feature",
+                         value = "class")
+
+all_feats <- dplyr::filter(types, class != "character")$feature |>
+  setdiff("sv_id")
+batter_vars <- lapply(all_feats, feat_by_batter)
+pitcher_vars <- lapply(all_feats, feat_by_pitcher)
+
+batter_playtime <- be_hard(dplyr::left_join, by = "batter") |>
+  Reduce(batter_vars, init_batter) |>
   imputeNAs() |>
   dplyr::filter(batter %in% ids) |>
   dplyr::left_join(people, by = c("batter" = "player_mlb_id")) |>
   # not all IDs for all features; impute where missing
-  dplyr::select(-playerID_LAHMAN)
+  dplyr::select(-playerID_LAHMAN) |>
+  dplyr::rename(player_id = "batter")
 
-playtime_data$birthCountry <- factor(playtime_data$birthCountry)
-playtime_data$bats <- factor(playtime_data$bats)
-playtime_data$throws <- factor(playtime_data$throws)
-playtime_data$debut <- as.Date(playtime_data$debut)
-playtime_data$birthDate <- as.Date(playtime_data$birthDate)
+pitcher_playtime <- be_hard(dplyr::left_join, by = "pitcher") |>
+  Reduce(pitcher_vars, init_pitcher) |>
+  imputeNAs() |>
+  dplyr::filter(pitcher %in% ids) |>
+  dplyr::left_join(people, by = c("pitcher" = "player_mlb_id")) |>
+  # not all IDs for all features; impute where missing
+  dplyr::select(-playerID_LAHMAN) |>
+  dplyr::rename(player_id = "pitcher")
 
-people_vars <- c("birthCountry", "bats", "throws",
-                 "debut", "birthDate")
-sapply(playtime_data[, people_vars], function(.x) any(is.na(.x)))
 
-types <- tibble::enframe(sapply(playtime_data, class),
-                         name = "feature",
-                         value = "class")
+playtime_data <- list(
+  pitcher = pitcher_playtime,
+  batter  = batter_playtime
+)
 
-feats <- setdiff(types$feature, c("playing_time", "batter"))
+saveRDS(playtime_data, file = "data/playtime-data.rds")
+playtime_data <- readRDS("data/playtime-data.rds")
+
+for ( i in people_vars ) {
+  playtime_data$pitcher[[i]] <- factor(playtime_data$pitcher[[i]])
+  playtime_data$batter[[i]] <- factor(playtime_data$batter[[i]])
+}
+
+feats <- setdiff(names(playtime_data$pitcher),
+                       c("player_id", "sv_id", "playing_time"))
 
 # stability selection ----
 ss <- stability_selection(
-  center_scale(playtime_data[, feats]),
-  playtime_data$playing_time,
+  center_scale(playtime_data$pitcher[, all_feats]),
+  playtime_data$pitcher$playing_time,
   kernel = "lasso"
 )
 
 plot(ss)
 
-uni_tbl <- calc_univariate(center_scale(playtime_data),
+uni_tbl <- calc_univariate(center_scale(playtime_data$pitcher),
                            var = "playing_time", test = "lm")
 
-feat2 <- c("times_faced", "iso_value", "hit_location",
-           "launch_speed_angle", "pitcher_at_bat_number",
-           "delta_run_exp", "zone")
+feat2 <- c("times_faced", "post_bat_score",
+           "bat_score", "woba_value", "game_pk")
 
-x <- center_scale(playtime_data) |> feature_matrix(feat2)
-y <- log(playtime_data$playing_time)
+x <- center_scale(playtime_data$pitcher) |> feature_matrix(feat2)
+y <- log(playtime_data$pitcher$playing_time)
 model <- glmnet::glmnet(x, y, family = "gaussian")
 preds <- predict(model, newx = x, type = "response", s = 0)[, 1L]
 rmse <- sqrt(mean((exp(y) - exp(preds))^2))
 rmse
+
+sqrt(mean((y - preds)^2))
+
 ccc <- calc_ccc(preds, y)
 ccc
-output <- data.frame(
-  actual = playtime_data$playing_time,
-  predicted = exp(preds)
+
+SomaPlotr::plotConcord(
+  playtime_data$pitcher$playing_time,
+  exp(preds)
 )
 
-plot(output); abline(a = 0, b = 1, col = "red")
 
+# try parsnip pkg
 coef_path_values <- c(0, 10^seq(-5, 1, length.out = 7L))
-fit <- linear_reg(penalty = 1) |>   # ridge
+fit <- linear_reg(penalty = 0) |>   # ridge
   set_engine("glmnet", path_values = coef_path_values) |>
   fit(playing_time ~ ., data = data.frame(playing_time = y, x))
 
 broom::tidy(fit)
 pred2 <- predict(fit, data.frame(x), penalty = 0)$.pred
-pred2 <- predict(fit, data.frame(x))$.pred
-sqrt(mean((pred2 - y)^2))
-plot(y, pred2)
-abline(a = 0, b = 1, col = 'red')
-plot(preds, pred2)
-abline(a = 0, b = 1, col = 'red')
+
+SomaPlotr::plotConcord(
+  playtime_data$pitcher$playing_time, exp(pred2)
+)
+sqrt(mean((exp(pred2) - exp(y))^2))
+
+
+
 
 
 # Feature selection ----
