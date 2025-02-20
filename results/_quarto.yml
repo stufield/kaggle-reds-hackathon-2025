@@ -1,0 +1,25 @@
+author: "Stu Field"
+
+date: today
+
+date-format: "D MMMM YYYY"
+
+output-dir: _output
+
+toc: true
+
+format:
+  html:
+    number-sections: true
+    colorlinks: true
+    code-tools: true
+    code-fold: false
+  # pdf:
+  #   documentclass: report
+  #   margin-left: 30mm
+  #   margin-right: 30mm
+  #   number-sections: true
+  #   colorlinks: true
+  # gfm:
+  #   preview-mode: raw
+

@@ -1,0 +1,45 @@
+---
+title: "Kaggle Contest: Cincinnati Reds 2025"
+author: "Stu Field"
+date: today
+date-format: "D MMMM YYYY"
+format:
+  html:
+    number-sections: true
+    colorlinks: true
+  # pdf:
+  #   number-sections: true
+  #   colorlinks: true
+  # gfm:
+  #   preview-mode: raw
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+#| label: setup
+#| include: FALSE
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment  = "#>",
+  fig.path = "figures/reds-"
+)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(purrr)
+library(ggplot2)
+library(patchwork)
+```
+
+
+# Overview
+
+
+
+-------------------
+
+Created in `RStudio` (`v2024.04.2+764`),
+by [Quarto](https://quarto.org/) (`v1.4.555`),
+and `r R.version$version.string`.
+
